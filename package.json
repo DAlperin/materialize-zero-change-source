@@ -1,0 +1,19 @@
+{
+  "name": "materialize-zero",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@rocicorp/zero": "^0.18.2025040300",
+    "dotenv": "^16.5.0"
+  }
+}
