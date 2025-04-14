@@ -106,8 +106,6 @@ export class ChangeMaker {
     makeZeroRequiredUpstreamTablesChanges(shardId: string): v0.ChangeStreamMessage[] {
         return [
             ...this.makeCreateTableChanges({
-                // schema: `zero_${shardId}`,
-                // name: 'clients',
                 schema: `public`,
                 name: `zero_${shardId}.clients`,
                 columns: {
@@ -134,8 +132,6 @@ export class ChangeMaker {
                 primaryKey: ['clientGroupID', 'clientID']
             }),
             ...this.makeCreateTableChanges({
-                // schema: 'zero',
-                // name: 'schemaVersions',
                 schema: `public`,
                 name: 'zero.schemaVersions',
                 columns: {
@@ -155,55 +151,6 @@ export class ChangeMaker {
                 },
                 primaryKey: ['lock']
             }),
-            ...this.makeCreateTableChanges({
-                schema: `public`,
-                name: 'zero.permissions',
-                columns: {
-                    permissions: {
-                        pos: 1,
-                        dataType: 'json',
-                        notNull: true
-                    },
-                    hash: {
-                        pos: 2,
-                        dataType: 'text',
-                        notNull: true
-                    },
-                },
-                primaryKey: ['hash']
-            }),
-        ];
-    }
-
-    makeOurTables(): v0.ChangeStreamMessage[] {
-        return [
-            ...this.makeCreateTableChanges({
-                schema: 'public',
-                name: 'messages',
-                columns: {
-                    author: {
-                        pos: 1,
-                        dataType: 'text',
-                        notNull: true
-                    },
-                    channel: {
-                        pos: 2,
-                        dataType: 'text',
-                        notNull: true
-                    },
-                    time: {
-                        pos: 3,
-                        dataType: 'text',
-                        notNull: true
-                    },
-                    message: {
-                        pos: 4,
-                        dataType: 'text',
-                        notNull: true
-                    }
-                },
-                primaryKey: ['time']
-            })
         ];
     }
 
@@ -242,26 +189,3 @@ export class ChangeMaker {
     }
 
 }
-
-/**
- * a | b | c
- * {
- * a: 1,
- * b: 2,
- * c: 3
- *}
- * {
- *  name: 'table name',
- *  schema: 'public',
- *  keyColumns: [...],
- * }
-**/
-
-// Architecture
-// list of tables/views we wants (start with one)
-// (optionally) introspect the schema/keys
-// issue subscription(s)
-// store the column names
-// for each 
-//  1. buffer the changes
-//  2. as progress advances, "commit" those changes downstream

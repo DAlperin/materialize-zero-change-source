@@ -4,7 +4,7 @@ const messages = table('messages').columns({
     id: number(),
     author: string(),
     channel: string(),
-    time: string(),
+    time: number(),
     message: string(),
 }).primaryKey('id');
 
@@ -12,7 +12,7 @@ const current_messages = table('current_messages').columns({
     id: number(),
     author: string(),
     channel: string(),
-    time: string(),
+    time: number(),
     message: string(),
 }).primaryKey('id');
 
