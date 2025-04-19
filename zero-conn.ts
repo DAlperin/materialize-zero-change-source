@@ -1,6 +1,7 @@
 import MaterializeSocket from "./materialize-backend";
 import { ChangeMaker } from "./change-maker";
 import { WebSocket } from "ws";
+import { SyncMode } from "./server";
 
 function versionToLexi(v: number | bigint): string {
     const base36Version = BigInt(v).toString(36);
@@ -8,7 +9,29 @@ function versionToLexi(v: number | bigint): string {
     return `${length}${base36Version}`;
 }
 
-let collections = ["messages", "expired_message_count", "current_messages", "zero.permissions"];
+// Until there's BigInt.fromString(val, radix) ... https://github.com/tc39/proposal-number-fromstring
+function parseBigInt(val: string, radix: number): bigint {
+    const base = BigInt(radix);
+    let result = 0n;
+    for (let i = 0; i < val.length; i++) {
+        result *= base;
+        result += BigInt(parseInt(val[i], radix));
+    }
+    return result;
+}
+
+export function versionFromLexi(lexiVersion: string): bigint {
+    const base36Version = lexiVersion.substring(1);
+    return parseBigInt(base36Version, 36);
+}
+
+let system_collections = ["zero.permissions"];
+let user_collections = process.env.MATERIALIZE_COLLECTIONS?.split(",") ?? [];
+
+let collections = [
+    ...system_collections,
+    ...user_collections,
+];
 
 export class ZeroConnection {
     // The map of materialize sockets forming the "backend" of this connection
@@ -20,16 +43,14 @@ export class ZeroConnection {
     // The change maker for this connection
     private changeMaker = new ChangeMaker();
     // The initial sync flag
-    private initialSync = true;
+    private syncMode: SyncMode;
 
     private prevTimestamp = -Infinity;
 
-    constructor(client: WebSocket, shardID: string, lastWatermark: string | undefined, abortController: AbortController) {
+    constructor(client: WebSocket, shardID: string, lastWatermark: string | undefined, abortController: AbortController, syncMode: SyncMode) {
         this.client = client;
         this.shardID = shardID;
-        if (lastWatermark != undefined) {
-            this.initialSync = false;
-        }
+        this.syncMode = syncMode;
 
         client.on("close", () => {
             console.log("Client closed");
@@ -37,10 +58,33 @@ export class ZeroConnection {
             abortController.abort();
         });
 
+        // Create all socket objects but don't connect immediately
         for (const collection of collections) {
-            // Create a new MaterializeSocket for each collection
-            let materializeSocket = new MaterializeSocket(collection, this.onChange.bind(this));
+            let materializeSocket = new MaterializeSocket(collection, this.onChange.bind(this), lastWatermark);
             this.materializeSockets.set(collection, materializeSocket);
+        }
+
+    }
+
+    public async connect(): Promise<void> {
+        // Connect all sockets
+        await this.connectAllSockets()
+    }
+
+    /**
+     * Connect all materialize sockets and handle connection errors
+     */
+    private async connectAllSockets(): Promise<void> {
+        try {
+            const connectionPromises = Array.from(this.materializeSockets.values()).map(socket =>
+                socket.connect()
+            );
+
+            await Promise.all(connectionPromises);
+        } catch (error) {
+            console.error("Failed to connect to Materialize:", error);
+            this.close();
+            throw error;
         }
     }
 
@@ -96,13 +140,17 @@ export class ZeroConnection {
         // Perhaps in the future however, it would be nice to have a heartbeat.
         let empty = true;
 
-        if (this.initialSync) {
-            this.initialSync = false;
-            empty = false
+        if (this.syncMode === SyncMode.INITIAL || this.syncMode === SyncMode.RESET) {
+            let openingMessage = []
 
-            let openingMessage = [
-                ...this.changeMaker.makeZeroRequiredUpstreamTablesChanges(this.shardID ?? "0"),
-            ]
+            if (this.syncMode === SyncMode.RESET) {
+                // openingMessage.push(...this.changeMaker.makeResetRequired(), ...this.changeMaker.makeCommitChanges(versionToLexi(this.prevTimestamp)));
+                this.client.send(JSON.stringify(this.changeMaker.makeResetRequired()));
+                this.close();
+                return;
+            }
+
+            openingMessage.push(...this.changeMaker.makeZeroRequiredUpstreamTablesChanges(this.shardID ?? "0"))
 
             for (const socket of this.materializeSockets.values()) {
                 if (socket.schema) {
@@ -113,6 +161,9 @@ export class ZeroConnection {
             }
 
             messages.push(...openingMessage);
+
+            this.syncMode = SyncMode.SYNCING;
+            empty = false
         }
 
 
@@ -126,18 +177,18 @@ export class ZeroConnection {
                     let colPos = colSpec.pos - 1;
                     rowObject[colName] = rowValue[colPos];
                 }
-                if (Number(val) > 0) {
+                if (Number(val) < 0) {
                     messages.push(
-                        ...this.changeMaker.makeInsertChanges(
+                        ...this.changeMaker.makeDeleteChanges(
                             versionToLexi(this.prevTimestamp),
                             rowObject,
                             tableName,
                         )
                     )
                 }
-                if (Number(val) < 0) {
+                if (Number(val) > 0) {
                     messages.push(
-                        ...this.changeMaker.makeDeleteChanges(
+                        ...this.changeMaker.makeInsertChanges(
                             versionToLexi(this.prevTimestamp),
                             rowObject,
                             tableName,
@@ -158,6 +209,7 @@ export class ZeroConnection {
         console.log("sending message at ts: ", this.prevTimestamp, versionToLexi(this.prevTimestamp));
 
         for (const message of messages) {
+            console.log(JSON.stringify(message));
             this.client.send(JSON.stringify(message));
         }
     }

@@ -1,0 +1,50 @@
+# Use a base image with Docker Compose support
+services:
+    postgres:
+        image: postgres:15
+        container_name: postgres
+        environment:
+            POSTGRES_USER: user
+            POSTGRES_PASSWORD: password
+            POSTGRES_DB: mydb
+        ports:
+            - "5432:5432"
+        volumes:
+            - postgres_data:/var/lib/postgresql/data
+
+    materialize-zero:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        container_name: materialize-zero
+        depends_on:
+            - postgres
+        environment:
+            MATERIALIZE_HOST_ADDRESS: ${MATERIALIZE_HOST_ADDRESS}
+            MATERIALIZE_AUTH_OPTIONS_USER: ${MATERIALIZE_AUTH_OPTIONS_USER}
+            MATERIALIZE_AUTH_OPTIONS_PASSWORD: ${MATERIALIZE_AUTH_OPTIONS_PASSWORD}
+            MATERIALIZE_DATABASE: ${MATERIALIZE_DATABASE}
+            PORT: 8080
+        ports:
+            - "8080:8080"
+
+    zero-cache:
+        image: rocicorp/zero:latest
+        restart: always
+        container_name: zero-cache
+        depends_on:
+            - postgres
+        environment:
+            ZERO_UPSTREAM_TYPE: custom
+            ZERO_UPSTREAM_DB: "ws://materialize-zero:8080"
+            ZERO_REPLICA_FILE: "/data/replica.db"
+            ZERO_CVR_DB: "postgres://user:password@postgres:5432/mydb"
+            ZERO_CHANGE_DB: "postgres://user:password@postgres:5432/mydb"
+        volumes:
+            - zero_data:/data
+        ports:
+            - "4848:4848"
+
+volumes:
+    postgres_data:
+    zero_data:

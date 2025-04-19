@@ -62,6 +62,16 @@ export class ChangeMaker {
         return this.#wrapInTransaction(changes, watermark);
     }
 
+    makeResetRequired(): v0.ChangeStreamMessage {
+        return [
+            'control',
+            {
+                tag: 'reset-required',
+                message: "Materialize reset"
+            }
+        ]
+    }
+
     makeCreateTableChanges(spec: TableSpec): v0.ChangeStreamMessage[] {
         if (!spec.primaryKey) {
             throw new Error(`Expected table ${spec.name} to have a primary key`);

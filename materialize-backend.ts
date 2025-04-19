@@ -3,8 +3,17 @@ const AUTH_OPTIONS = {
     user: process.env.MATERIALIZE_AUTH_OPTIONS_USER,
     password: process.env.MATERIALIZE_AUTH_OPTIONS_PASSWORD,
 };
+const DATABASE = process.env.MATERIALIZE_DATABASE;
 
 import type { v0 } from "@rocicorp/zero/change-protocol/v0";
+import { versionFromLexi } from "./zero-conn";
+
+export class OutOfBoundsTimestampError extends Error {
+    constructor(lastWatermark: string | undefined) {
+        super(`Timestamp out of bounds: ${lastWatermark}`);
+        this.name = "OutOfBoundsTimestampError";
+    }
+}
 
 type TableSpec = v0.TableCreate['spec'];
 
@@ -35,8 +44,10 @@ ORDER BY nspname, pc.relname;
 `
 }
 
+const createRequiredTablesQuery = `create table "zero.permissions" (permissions text, hash text);`
+
 export default class MaterializeSocket {
-    private socket: WebSocket;
+    private socket: WebSocket | null = null;
     // This is the table or view we are subscribing to
     private collection: string;
     private _pending: any[] = [];
@@ -44,58 +55,131 @@ export default class MaterializeSocket {
     public staged: Map<string, Number> = new Map();
     public schema: TableSpec | null = null;
     public queryNumber = 0;
+    private lastWatermark: bigint | undefined;
+    private changeCallback: (collection: string) => void;
+    private isConnected = false;
 
-    constructor(collection: string, changeCallback: (collection: string) => void) {
+    constructor(collection: string, changeCallback: (collection: string) => void, lastWatermark: string | undefined = undefined) {
         console.log("MaterializeSocket constructor");
         this.collection = collection;
-        this.socket = new WebSocket(`wss://${HOST_ADDRESS}/api/experimental/sql`);
-        let query = `SUBSCRIBE TO (SELECT * FROM "${collection}") WITH (PROGRESS)`;
-        this.socket.onopen = () => {
-            this.socket.send(JSON.stringify(AUTH_OPTIONS));
-            this.socket.send(JSON.stringify({
-                queries: [
-                    { query: schemaQuery(collection) },
-                    { query: query }
-                ]
-            }));
-        }
+        this.changeCallback = changeCallback;
 
-        let newSchema: TableSpec = {
-            schema: "",
-            name: "",
-            columns: {},
-            primaryKey: []
-        };
-        this.socket.onmessage = (ev) => {
-            let data = JSON.parse(ev.data);
-            if (data.type === "Error") {
-                console.error("MaterializeSocket error", data);
-                throw new Error(data.payload);
+        if (lastWatermark) {
+            this.lastWatermark = versionFromLexi(lastWatermark);
+        }
+    }
+
+    /**
+     * Connect to the Materialize WebSocket API
+     * This method allows callers to catch errors during the connection process
+     */
+    public connect(): Promise<void> {
+        return new Promise((resolve, reject) => {
+            if (this.isConnected) {
+                resolve();
+                return;
             }
-            if (data.type === "CommandComplete") {
-                this.queryNumber++;
-                this.schema = newSchema;
+
+            try {
+                this.socket = new WebSocket(`wss://${HOST_ADDRESS}/api/experimental/sql`);
+                let query = `SUBSCRIBE TO (SELECT * FROM "${this.collection}") WITH (PROGRESS) ${this.lastWatermark ? `AS OF ${this.lastWatermark}` : ""}`;
+
+                let newSchema: TableSpec = {
+                    schema: "",
+                    name: "",
+                    columns: {},
+                    primaryKey: []
+                };
+
+                // Handle connection errors
+                this.socket.onerror = (error) => {
+                    reject(new Error(`WebSocket connection error: ${error.toString()}`));
+                };
+
+                this.socket.onopen = () => {
+                    if (!this.socket) return;
+                    let queries = [
+                        { query: createRequiredTablesQuery },
+                        { query: schemaQuery(this.collection) },
+                        { query: query }
+                    ]
+                    if (DATABASE) {
+                        queries.unshift({ query: `SET DATABASE = "${DATABASE}"` });
+                    }
+                    this.socket.send(JSON.stringify(AUTH_OPTIONS));
+                    this.socket.send(JSON.stringify({
+                        queries: queries,
+                    }));
+                    // We don't resolve here because we need to wait for potential errors in the authentication/query setup
+                };
+
+                this.socket.onmessage = (ev) => {
+                    let data = JSON.parse(ev.data);
+                    if (data.type === "Error") {
+                        if (data.payload.message === `Error: table "materialize.public.zero.permissions" already exists`) {
+                            // Ignore this error, it just means the table already exists
+                            return;
+                        }
+                        console.error("MaterializeSocket error", data);
+                        if (data.payload.message?.startsWith("Timestamp")) {
+                            const error = new OutOfBoundsTimestampError(this.lastWatermark?.toString());
+                            reject(error);
+                            return;
+                        }
+                        const error = new Error(typeof data.payload === 'string' ? data.payload : JSON.stringify(data.payload));
+                        reject(error);
+                        return;
+                    }
+
+                    if (data.type === "CommandComplete") {
+                        this.queryNumber++;
+                        this.schema = newSchema;
+
+                    }
+                    // Schema query
+                    if (this.queryNumber === 1) {
+                        if (data.type === "Row") {
+                            newSchema = this.buildSchema(data, newSchema);
+                        }
+                    } else if (this.queryNumber === 2) {
+                        if (data.type === "Row") {
+                            // Mark as connected once we actually start receiving data
+                            if (!this.isConnected) {
+                                this.isConnected = true;
+                                resolve();
+                            }
+                        }
+                        // Parse log, and enqueue data.
+                        // Pend data updates; not progress statements.
+                        if (!data.payload[1]) {
+                            this._pending.push(data);
+                        }
+                        // We can process anything with a timestamp strictly less than this.
+                        // Perhaps track the minimum timestamp and guard subsequent work by
+                        // a test that this timestamp is greater than it.
+                        if (this._progress < data.payload[0]) {
+                            this._progress = data.payload[0];
+                            this.changeCallback(this.collection);
+                        }
+                    }
+                };
+
+                // Set a timeout to prevent hanging forever
+                const timeout = setTimeout(() => {
+                    if (!this.isConnected) {
+                        reject(new Error("Connection timeout"));
+                        this.close();
+                    }
+                }, 10000); // 10 second timeout
+
+                // Clear the timeout once connected
+                this.socket.addEventListener("open", () => {
+                    clearTimeout(timeout);
+                });
+            } catch (error) {
+                reject(error);
             }
-            // Schema query
-            if (this.queryNumber === 0) {
-                if (data.type === "Row") {
-                    newSchema = this.buildSchema(data, newSchema);
-                }
-            } else if (this.queryNumber === 1) {
-                // Parse log, and enqueue data.
-                // Pend data updates; not progress statements.
-                if (!data.payload[1]) {
-                    this._pending.push(data);
-                }
-                // We can process anything with a timestamp strictly less than this.
-                // Perhaps track the minimum timestamp and guard subsequent work by
-                // a test that this timestamp is greater than it.
-                if (this._progress < data.payload[0]) {
-                    this._progress = data.payload[0];
-                    changeCallback(this.collection);
-                }
-            }
-        };
+        });
     }
 
     private buildSchema(data: any, schema: TableSpec) {
@@ -127,6 +211,10 @@ export default class MaterializeSocket {
     }
 
     public close() {
-        this.socket.close();
+        if (this.socket) {
+            this.socket.close();
+            this.socket = null;
+            this.isConnected = false;
+        }
     }
-} 
+}
