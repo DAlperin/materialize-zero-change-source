@@ -116,7 +116,18 @@ export default class MaterializeSocket {
                 this.socket.onmessage = (ev) => {
                     let data = JSON.parse(ev.data);
                     if (data.type === "Error") {
-                        if (data.payload.message === `Error: table "materialize.public.zero.permissions" already exists`) {
+                        let zero_perm_error_regex = /table ".+\.zero\.permissions" already exists/;
+                        if (zero_perm_error_regex.test(data.payload.message)) {
+                            // If we get here, the socket won't execute the rest of the commands
+                            // so we need to send them again.
+                            let queries = [
+                                { query: schemaQuery(this.collection) },
+                                { query: query }
+                            ]
+                            this.socket?.send(JSON.stringify({
+                                queries: queries,
+                            }));
+                            this.queryNumber++;
                             // Ignore this error, it just means the table already exists
                             return;
                         }
@@ -134,14 +145,13 @@ export default class MaterializeSocket {
                     if (data.type === "CommandComplete") {
                         this.queryNumber++;
                         this.schema = newSchema;
-
                     }
                     // Schema query
-                    if (this.queryNumber === 1) {
+                    if (this.queryNumber === 2) {
                         if (data.type === "Row") {
                             newSchema = this.buildSchema(data, newSchema);
                         }
-                    } else if (this.queryNumber === 2) {
+                    } else if (this.queryNumber === 3) {
                         if (data.type === "Row") {
                             // Mark as connected once we actually start receiving data
                             if (!this.isConnected) {
