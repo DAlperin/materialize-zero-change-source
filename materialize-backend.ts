@@ -46,6 +46,13 @@ ORDER BY nspname, pc.relname;
 
 const createRequiredTablesQuery = `create table "zero.permissions" (permissions text, hash text);`
 
+enum SocketState {
+    SETDB,
+    CREATEREQTABLES,
+    SCHEMA,
+    SUBSCRIBE,
+}
+
 export default class MaterializeSocket {
     private socket: WebSocket | null = null;
     // This is the table or view we are subscribing to
@@ -54,10 +61,10 @@ export default class MaterializeSocket {
     private _progress = -Infinity;
     public staged: Map<string, Number> = new Map();
     public schema: TableSpec | null = null;
-    public queryNumber = 0;
     private lastWatermark: bigint | undefined;
     private changeCallback: (collection: string) => void;
     private isConnected = false;
+    private state: SocketState = SocketState.SETDB;
 
     constructor(collection: string, changeCallback: (collection: string) => void, lastWatermark: string | undefined = undefined) {
         console.log("MaterializeSocket constructor");
@@ -96,19 +103,22 @@ export default class MaterializeSocket {
                     reject(new Error(`WebSocket connection error: ${error.toString()}`));
                 };
 
+                let baseQueries = [
+                    ...(DATABASE ? [{ query: `SET DATABASE = "${DATABASE}"` }] : []),
+                    { query: createRequiredTablesQuery },
+                    { query: schemaQuery(this.collection) },
+                    { query: query }
+                ]
+
+                if (!DATABASE) {
+                    this.state = SocketState.CREATEREQTABLES;
+                }
+
                 this.socket.onopen = () => {
                     if (!this.socket) return;
-                    let queries = [
-                        { query: createRequiredTablesQuery },
-                        { query: schemaQuery(this.collection) },
-                        { query: query }
-                    ]
-                    if (DATABASE) {
-                        queries.unshift({ query: `SET DATABASE = "${DATABASE}"` });
-                    }
                     this.socket.send(JSON.stringify(AUTH_OPTIONS));
                     this.socket.send(JSON.stringify({
-                        queries: queries,
+                        queries: baseQueries,
                     }));
                     // We don't resolve here because we need to wait for potential errors in the authentication/query setup
                 };
@@ -117,41 +127,49 @@ export default class MaterializeSocket {
                     let data = JSON.parse(ev.data);
                     if (data.type === "Error") {
                         let zero_perm_error_regex = /table ".+\.zero\.permissions" already exists/;
-                        if (zero_perm_error_regex.test(data.payload.message)) {
+                        if (this.state == SocketState.CREATEREQTABLES && zero_perm_error_regex.test(data.payload.message)) {
                             // If we get here, the socket won't execute the rest of the commands
                             // so we need to send them again.
-                            let queries = [
-                                { query: schemaQuery(this.collection) },
-                                { query: query }
-                            ]
                             this.socket?.send(JSON.stringify({
-                                queries: queries,
+                                queries: baseQueries.slice(2),
                             }));
-                            this.queryNumber++;
-                            // Ignore this error, it just means the table already exists
+                            this.state = SocketState.SCHEMA;
                             return;
                         }
-                        console.error("MaterializeSocket error", data);
                         if (data.payload.message?.startsWith("Timestamp")) {
                             const error = new OutOfBoundsTimestampError(this.lastWatermark?.toString());
                             reject(error);
                             return;
                         }
+                        console.error("MaterializeSocket error", data);
                         const error = new Error(typeof data.payload === 'string' ? data.payload : JSON.stringify(data.payload));
                         reject(error);
                         return;
                     }
 
                     if (data.type === "CommandComplete") {
-                        this.queryNumber++;
+                        switch (this.state) {
+                            case SocketState.SETDB:
+                                this.state = SocketState.CREATEREQTABLES;
+                                break;
+                            case SocketState.CREATEREQTABLES:
+                                this.state = SocketState.SCHEMA;
+                                break;
+                            case SocketState.SCHEMA:
+                                this.state = SocketState.SUBSCRIBE;
+                                break;
+                            case SocketState.SUBSCRIBE:
+                                // We are already subscribed
+                                break;
+                        }
                         this.schema = newSchema;
                     }
-                    // Schema query
-                    if (this.queryNumber === 2) {
+
+                    if (this.state === SocketState.SCHEMA) {
                         if (data.type === "Row") {
                             newSchema = this.buildSchema(data, newSchema);
                         }
-                    } else if (this.queryNumber === 3) {
+                    } else if (this.state === SocketState.SUBSCRIBE) {
                         if (data.type === "Row") {
                             // Mark as connected once we actually start receiving data
                             if (!this.isConnected) {
