@@ -44,7 +44,7 @@ ORDER BY nspname, pc.relname;
 `
 }
 
-const createRequiredTablesQuery = `create table "zero.permissions" (permissions text, hash text);`
+const createRequiredTablesQuery = `create table "zero.permissions" (permissions json NOT NULL, hash text);`
 
 enum SocketState {
     SETDB,
