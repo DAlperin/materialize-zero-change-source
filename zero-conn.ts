@@ -141,12 +141,17 @@ export class ZeroConnection {
         let empty = true;
 
         if (this.syncMode === SyncMode.INITIAL || this.syncMode === SyncMode.RESET) {
+            console.log("initializing connection for shard: ", this.shardID);
             let openingMessage = []
 
             if (this.syncMode === SyncMode.RESET) {
-                // openingMessage.push(...this.changeMaker.makeResetRequired(), ...this.changeMaker.makeCommitChanges(versionToLexi(this.prevTimestamp)));
                 this.client.send(JSON.stringify(this.changeMaker.makeResetRequired()));
                 this.close();
+                return;
+            }
+
+            if (this.materializeSockets.get("zero.permissions")!.staged.size < 1) {
+                // Make sure that the first message we send includes the permissions table
                 return;
             }
 
@@ -168,6 +173,8 @@ export class ZeroConnection {
 
 
         for (const [tableName, subscribe] of this.materializeSockets) {
+            let deletes = [];
+            let inserts = [];
             for (let [key, val] of subscribe.staged) {
                 empty = false;
 
@@ -177,25 +184,34 @@ export class ZeroConnection {
                     let colPos = colSpec.pos - 1;
                     rowObject[colName] = rowValue[colPos];
                 }
+
+                if (val === 0 || Number(val) > 1 || Number(val) < -1) {
+                    console.warn(`Unexpected staged value for ${tableName}: ${val}`);
+                }
+
                 if (Number(val) < 0) {
-                    messages.push(
+                    deletes.push(
                         ...this.changeMaker.makeDeleteChanges(
                             versionToLexi(this.prevTimestamp),
                             rowObject,
                             tableName,
+                            subscribe.schema!
                         )
-                    )
+                    );
                 }
                 if (Number(val) > 0) {
-                    messages.push(
+                    inserts.push(
                         ...this.changeMaker.makeInsertChanges(
                             versionToLexi(this.prevTimestamp),
                             rowObject,
                             tableName,
+                            subscribe.schema!,
                         )
-                    )
+                    );
                 }
             }
+            messages.push(...deletes);
+            messages.push(...inserts);
             subscribe.staged.clear();
         }
 
@@ -206,10 +222,9 @@ export class ZeroConnection {
         messages.push(
             ...this.changeMaker.makeCommitChanges(versionToLexi(this.prevTimestamp)),
         )
-        console.log("sending message at ts: ", this.prevTimestamp, versionToLexi(this.prevTimestamp));
 
         for (const message of messages) {
-            console.log(JSON.stringify(message));
+            console.log(JSON.stringify(message))
             this.client.send(JSON.stringify(message));
         }
     }

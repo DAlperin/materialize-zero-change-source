@@ -8,7 +8,8 @@ export class ChangeMaker {
         watermark: string,
         row: Record<string, JSONValue>,
         tableName: string,
-        withTransaction = false
+        spec: TableSpec,
+        withTransaction = false,
     ): v0.ChangeStreamMessage[] {
         const changes: v0.ChangeStreamMessage[] = [
             [
@@ -19,7 +20,39 @@ export class ChangeMaker {
                     relation: {
                         name: tableName,
                         schema: 'public',
-                        keyColumns: Object.keys(row)
+                        keyColumns: spec.primaryKey || Object.keys(row)
+                    }
+                }
+            ] satisfies v0.Data
+        ];
+
+        // if the change is already in a transaction, don't wrap it in another
+        if (!withTransaction) {
+            return changes;
+        }
+
+        return this.#wrapInTransaction(changes, watermark);
+    }
+
+    makeUpdateChanges(
+        watermark: string,
+        oldRow: Record<string, JSONValue>,
+        newRow: Record<string, JSONValue>,
+        tableName: string,
+        spec: TableSpec,
+        withTransaction = false,
+    ): v0.ChangeStreamMessage[] {
+        const changes: v0.ChangeStreamMessage[] = [
+            [
+                'data',
+                {
+                    tag: 'update',
+                    key: oldRow,
+                    new: newRow,
+                    relation: {
+                        name: tableName,
+                        schema: 'public',
+                        keyColumns: spec.primaryKey || Object.keys(oldRow)
                     }
                 }
             ] satisfies v0.Data
@@ -37,7 +70,8 @@ export class ChangeMaker {
         watermark: string,
         row: Record<string, string>,
         tableName: string,
-        withTransaction = false
+        spec: TableSpec,
+        withTransaction = false,
     ): v0.ChangeStreamMessage[] {
         const changes: v0.ChangeStreamMessage[] = [
             [
@@ -48,7 +82,7 @@ export class ChangeMaker {
                     relation: {
                         name: tableName,
                         schema: 'public',
-                        keyColumns: Object.keys(row)
+                        keyColumns: spec.primaryKey || Object.keys(row)
                     }
                 }
             ] satisfies v0.Data
@@ -194,7 +228,6 @@ export class ChangeMaker {
             ...this.makeBeginChanges(watermark),
             ...changes,
             ...this.makeCommitChanges(watermark)
-            //
         ];
     }
 

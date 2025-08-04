@@ -67,7 +67,7 @@ export default class MaterializeSocket {
     private state: SocketState = SocketState.SETDB;
 
     constructor(collection: string, changeCallback: (collection: string) => void, lastWatermark: string | undefined = undefined) {
-        console.log("MaterializeSocket constructor");
+        console.log(`MaterializeSocket constructor for collection: ${collection}, lastWatermark: ${lastWatermark}`);
         this.collection = collection;
         this.changeCallback = changeCallback;
 
@@ -88,8 +88,9 @@ export default class MaterializeSocket {
             }
 
             try {
-                this.socket = new WebSocket(`wss://${HOST_ADDRESS}/api/experimental/sql`);
-                let query = `SUBSCRIBE TO (SELECT * FROM "${this.collection}") WITH (PROGRESS) ${this.lastWatermark ? `AS OF ${this.lastWatermark}` : ""}`;
+                this.socket = new WebSocket(`ws://${HOST_ADDRESS}/api/experimental/sql`);
+                let query = `SUBSCRIBE TO (SELECT * FROM "${this.collection}") WITH (PROGRESS${this.lastWatermark ? ",SNAPSHOT=false" : ""}) ${this.lastWatermark ? `AS OF ${this.lastWatermark}` : ""}`;
+
 
                 let newSchema: TableSpec = {
                     schema: "",
@@ -100,7 +101,8 @@ export default class MaterializeSocket {
 
                 // Handle connection errors
                 this.socket.onerror = (error) => {
-                    reject(new Error(`WebSocket connection error: ${error.toString()}`));
+                    let errorEvent = error as ErrorEvent;
+                    reject(new Error(`WebSocket connection error: ${errorEvent.message}`));
                 };
 
                 let baseQueries = [

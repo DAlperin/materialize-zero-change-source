@@ -40,6 +40,7 @@ services:
             ZERO_REPLICA_FILE: "/data/replica.db"
             ZERO_CVR_DB: "postgres://user:password@postgres:5432/mydb"
             ZERO_CHANGE_DB: "postgres://user:password@postgres:5432/mydb"
+            ZERO_NUM_SYNC_WORKERS: 1
         volumes:
             - zero_data:/data
         ports:
