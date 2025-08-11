@@ -195,6 +195,33 @@ export class ChangeMaker {
                 },
                 primaryKey: ['lock']
             }),
+            ...this.makeCreateTableChanges({
+                schema: `public`,
+                name: `zero_${shardId}.mutations`,
+                columns: {
+                    clientGroupID: {
+                        pos: 0,
+                        dataType: 'text',
+                        notNull: true
+                    },
+                    clientID: {
+                        pos: 1,
+                        dataType: 'text',
+                        notNull: true
+                    },
+                    mutationID: {
+                        pos: 2,
+                        dataType: 'int8',
+                        notNull: true
+                    },
+                    mutation: {
+                        pos: 3,
+                        dataType: 'json',
+                        notNull: true
+                    },
+                },
+                primaryKey: ['clientGroupID', 'clientID', 'mutationID']
+            })
         ];
     }
 

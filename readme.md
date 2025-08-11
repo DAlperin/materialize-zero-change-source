@@ -3,6 +3,7 @@
 ## Getting Started
 
 1. Copy `.env.example` to `.env` and fill in the required values.
+   - If you are using materialize cloud the `MATERIALIZE_URL` variable should point to your materialize cloud instance with wss://. If local use `ws://...`
    - The most interesting one is `MATERIALIZE_COLLECTIONS`, which is a comma-separated list of "collections" (read: views, matviews, tables, anything you can query in mz) that you want to sync to zero.
 2. Run `docker-compose up` to start the services.
 
