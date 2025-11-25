@@ -4,6 +4,7 @@ import MaterializeSocket, { OutOfBoundsTimestampError } from "./materialize-back
 import { WebSocketServer, WebSocket } from "ws";
 import url from "url";
 import { ZeroConnection } from "./zero-conn";
+import { createServer, IncomingMessage, ServerResponse } from "http";
 
 export enum SyncMode {
     INITIAL,
@@ -13,11 +14,18 @@ export enum SyncMode {
 
 export default class Server {
     readonly #subscriptions = new Map<string, ZeroConnection>();
+    private readonly defaultTable =
+        process.env.MATERIALIZE_COLLECTIONS?.split(",")?.[0]?.trim() || "zero.permissions";
 
 
     // Start the client WebSocket server
     public startClientServer(port: number) {
-        const wss = new WebSocketServer({ port });
+        const httpServer = createServer((req, res) => this.handleTransformRequest(req, res));
+        const wss = new WebSocketServer({ server: httpServer });
+
+        httpServer.listen(port, () => {
+            console.log(`Server listening on port ${port}`);
+        });
 
         wss.on("connection", async (ws, req) => {
             const parsedUrl = url.parse(req.url || "", true); // true to get query as object
@@ -63,6 +71,87 @@ export default class Server {
                 }
             }
         });
+    }
+
+    private handleTransformRequest(req: IncomingMessage, res: ServerResponse) {
+        if (req.method !== "POST") {
+            res.statusCode = 404;
+            res.end();
+            return;
+        }
+
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk) => chunks.push(chunk));
+        req.on("end", () => {
+            let body: any = undefined;
+            try {
+                const raw = Buffer.concat(chunks).toString() || "[]";
+                body = JSON.parse(raw);
+            } catch {
+                // fall through with undefined body
+            }
+
+            const response = this.buildTransformResponse(body);
+
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify(response));
+        });
+    }
+
+    private buildTransformResponse(body: any): ["transformed", any[]] {
+        // Body can arrive as ['transform', [{...}]] or directly as an array of requests.
+        let queryRequests: any[] = [];
+
+        if (Array.isArray(body)) {
+            if (body.length === 2 && body[0] === "transform" && Array.isArray(body[1])) {
+                queryRequests = body[1];
+            } else {
+                queryRequests = body;
+            }
+        }
+
+        const responses = queryRequests.map((queryReq) => this.buildQueryResponse(queryReq));
+        return ["transformed", responses];
+    }
+
+    private buildQueryResponse(queryReq: any) {
+        if (!queryReq || typeof queryReq !== "object") {
+            return {
+                error: "app",
+                id: "",
+                name: "",
+                details: "Invalid query request",
+            };
+        }
+
+        const id = typeof queryReq.id === "string" ? queryReq.id : "";
+        const name = typeof queryReq.name === "string" ? queryReq.name : "";
+
+        if (!id || !name) {
+            return {
+                error: "app",
+                id,
+                name,
+                details: "Query requests must include id and name",
+            };
+        }
+
+        return {
+            id,
+            name,
+            ast: {
+                table: this.defaultTable,
+                where: [
+                    {
+                        type: "simple",
+                        op: "=",
+                        left: { type: "literal", value: 1 },
+                        right: { type: "literal", value: 0 },
+                    },
+                ],
+            },
+        };
     }
 
 }

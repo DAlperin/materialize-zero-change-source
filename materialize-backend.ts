@@ -118,7 +118,11 @@ export default class MaterializeSocket {
 
                 this.socket.onopen = () => {
                     if (!this.socket) return;
-                    this.socket.send(JSON.stringify(AUTH_OPTIONS));
+                    const authPayload: { user?: string; password?: string } = { user: AUTH_OPTIONS.user };
+                    if (AUTH_OPTIONS.password) {
+                        authPayload.password = AUTH_OPTIONS.password;
+                    }
+                    this.socket.send(JSON.stringify(authPayload));
                     this.socket.send(JSON.stringify({
                         queries: baseQueries,
                     }));
