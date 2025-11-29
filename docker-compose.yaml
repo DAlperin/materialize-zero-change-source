@@ -17,11 +17,14 @@ services:
         container_name: materialize-zero
         depends_on:
             - postgres
+        env_file:
+            - .env
         environment:
             MATERIALIZE_HOST_ADDRESS: ${MATERIALIZE_HOST_ADDRESS}
             MATERIALIZE_AUTH_OPTIONS_USER: ${MATERIALIZE_AUTH_OPTIONS_USER}
             MATERIALIZE_AUTH_OPTIONS_PASSWORD: ${MATERIALIZE_AUTH_OPTIONS_PASSWORD}
             MATERIALIZE_DATABASE: ${MATERIALIZE_DATABASE}
+            MATERIALIZE_COLLECTIONS: "orders_flat_mv,courier_schedule_mv,customers_mv,orders_search_source_mv,products_mv,store_inventory_mv,stores_mv"
             PORT: 8080
         ports:
             - "8081:8080"

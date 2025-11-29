@@ -46,6 +46,8 @@ export class ZeroConnection {
     private syncMode: SyncMode;
 
     private prevTimestamp = -Infinity;
+    // Track when every subscribe has moved beyond its own snapshot.
+    private initialSnapshotsComplete = false;
 
     constructor(client: WebSocket, shardID: string, lastWatermark: string | undefined, abortController: AbortController, syncMode: SyncMode) {
         this.client = client;
@@ -97,10 +99,39 @@ export class ZeroConnection {
     private onChange(collection: string) {
         // Determine the low watermark across all subscribes.
         let min_progress = Infinity;
+        let allPastSnapshots = true;
         for (const [_, subscribe] of this.materializeSockets) {
             if (min_progress > subscribe.progress) {
                 min_progress = subscribe.progress;
             }
+            const snapshotTs = subscribe.snapshotTimestamp;
+            if (snapshotTs === null || snapshotTs === undefined) {
+                allPastSnapshots = false;
+            } else if (subscribe.progress <= snapshotTs) {
+                allPastSnapshots = false;
+            }
+        }
+        // Don't ship the first transaction until every subscribe has advanced
+        // past its own snapshot timestamp. This keeps the initial snapshot in
+        // one transaction even if individual subscriptions have slightly
+        // different AS OF timestamps.
+        if (this.syncMode === SyncMode.INITIAL && !this.initialSnapshotsComplete) {
+            if (!allPastSnapshots) {
+                console.log(
+                    "waiting for all subscriptions to advance past snapshot",
+                    Array.from(this.materializeSockets.keys()).map((name) => {
+                        const sub = this.materializeSockets.get(name)!;
+                        return {
+                            collection: name,
+                            snapshotTs: sub.snapshotTimestamp,
+                            progress: sub.progress
+                        };
+                    })
+                );
+                return;
+            }
+            console.log("all subscriptions past snapshot, shipping initial transaction");
+            this.initialSnapshotsComplete = true;
         }
         // Check that we e.g. haven't added a new subscribe that is not caught up,
         // and also don't bother doing work if we couldn't learn anything new.

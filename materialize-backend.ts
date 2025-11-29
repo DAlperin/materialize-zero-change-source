@@ -65,6 +65,7 @@ export default class MaterializeSocket {
     private changeCallback: (collection: string) => void;
     private isConnected = false;
     private state: SocketState = SocketState.SETDB;
+    private _snapshotTimestamp: number | null = null;
 
     constructor(collection: string, changeCallback: (collection: string) => void, lastWatermark: string | undefined = undefined) {
         console.log(`MaterializeSocket constructor for collection: ${collection}, lastWatermark: ${lastWatermark}`);
@@ -177,6 +178,11 @@ export default class MaterializeSocket {
                         }
                     } else if (this.state === SocketState.SUBSCRIBE) {
                         if (data.type === "Row") {
+                            const ts = Number(data.payload[0]);
+                            if (this._snapshotTimestamp === null && Number.isFinite(ts)) {
+                                this._snapshotTimestamp = ts;
+                                console.log(`snapshot timestamp for ${this.collection}: ${ts}`);
+                            }
                             // Mark as connected once we actually start receiving data
                             if (!this.isConnected) {
                                 this.isConnected = true;
@@ -191,8 +197,12 @@ export default class MaterializeSocket {
                         // We can process anything with a timestamp strictly less than this.
                         // Perhaps track the minimum timestamp and guard subsequent work by
                         // a test that this timestamp is greater than it.
-                        if (this._progress < data.payload[0]) {
-                            this._progress = data.payload[0];
+                        const ts = Number(data.payload[0]);
+                        if (!Number.isFinite(ts)) {
+                            return;
+                        }
+                        if (this._progress < ts) {
+                            this._progress = ts;
                             this.changeCallback(this.collection);
                         }
                     }
@@ -234,6 +244,10 @@ export default class MaterializeSocket {
 
     public get progress() {
         return this._progress;
+    }
+
+    public get snapshotTimestamp() {
+        return this._snapshotTimestamp;
     }
 
     public get pending() {
