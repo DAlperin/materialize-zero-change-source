@@ -45,7 +45,7 @@ export class ZeroConnection {
     // The initial sync flag
     private syncMode: SyncMode;
 
-    private prevTimestamp = -Infinity;
+    private prevTimestamp: number;
     // Track when every subscribe has moved beyond its own snapshot.
     private initialSnapshotsComplete = false;
 
@@ -53,6 +53,10 @@ export class ZeroConnection {
         this.client = client;
         this.shardID = shardID;
         this.syncMode = syncMode;
+        // Seed prevTimestamp from lastWatermark so the first progress tick at
+        // that watermark doesn't trigger a duplicate BEGIN+COMMIT that
+        // collides with zero-cache's existing changeLog entry.
+        this.prevTimestamp = lastWatermark ? Number(versionFromLexi(lastWatermark)) : -Infinity;
 
         client.on("close", () => {
             console.log("Client closed");
@@ -166,11 +170,6 @@ export class ZeroConnection {
             ...this.changeMaker.makeBeginChanges(versionToLexi(this.prevTimestamp)),
         ];
 
-        // The empty flag is used to determine if there are any changes to ship
-        // If there are no changes, we don't need to ship anything.
-        // Perhaps in the future however, it would be nice to have a heartbeat.
-        let empty = true;
-
         if (this.syncMode === SyncMode.INITIAL || this.syncMode === SyncMode.RESET) {
             console.log("initializing connection for shard: ", this.shardID);
             let openingMessage = []
@@ -199,7 +198,6 @@ export class ZeroConnection {
             messages.push(...openingMessage);
 
             this.syncMode = SyncMode.SYNCING;
-            empty = false
         }
 
 
@@ -207,8 +205,6 @@ export class ZeroConnection {
             let deletes = [];
             let inserts = [];
             for (let [key, val] of subscribe.staged) {
-                empty = false;
-
                 let rowValue = JSON.parse(key);
                 let rowObject: Record<string, any> = {};
                 for (let [colName, colSpec] of Object.entries(subscribe.schema?.columns ?? {})) {
@@ -246,10 +242,10 @@ export class ZeroConnection {
             subscribe.staged.clear();
         }
 
-        if (empty) {
-            return;
-        }
-
+        // Always ship the BEGIN+COMMIT, even with no row events: the watermark
+        // bump acts as a heartbeat so zero-cache's persisted watermark advances
+        // during quiet periods. Without it, MZ compaction can advance past the
+        // watermark, causing "could not find a valid timestamp" on reconnect.
         messages.push(
             ...this.changeMaker.makeCommitChanges(versionToLexi(this.prevTimestamp)),
         )

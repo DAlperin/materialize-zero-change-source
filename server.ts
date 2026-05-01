@@ -33,7 +33,10 @@ export default class Server {
             let lastWatermark = <string | undefined>query.lastWatermark;
             const shardID = <string>query.shardNum;
             if (!shardID) {
-                ws.send(JSON.stringify({ error: "No shardID provided" }));
+                // zero-cache validates each frame against changeStreamMessageSchema
+                // (a tuple union); a plain {error} object crashes it. Just close —
+                // zero-cache will reconnect on its own.
+                console.error("No shardID provided");
                 ws.close();
                 return;
             }
@@ -65,7 +68,6 @@ export default class Server {
                     retries--;
                     if (retries === 0) {
                         console.error("Error creating connection", e);
-                        ws.send(JSON.stringify({ error: "Error creating connection" }));
                         ws.close();
                     }
                 }

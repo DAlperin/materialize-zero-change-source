@@ -143,7 +143,13 @@ export default class MaterializeSocket {
                             this.state = SocketState.SCHEMA;
                             return;
                         }
-                        if (data.payload.message?.startsWith("Timestamp")) {
+                        // Match both the legacy "Timestamp..." prefix and the
+                        // current "could not find a valid timestamp for the
+                        // query" wording (SQL state 22000) so a stale
+                        // watermark triggers the RESET retry path.
+                        const errMsg: string | undefined = data.payload.message;
+                        if (errMsg?.startsWith("Timestamp") ||
+                            errMsg?.includes("could not find a valid timestamp")) {
                             const error = new OutOfBoundsTimestampError(this.lastWatermark?.toString());
                             reject(error);
                             return;

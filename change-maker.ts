@@ -20,7 +20,7 @@ export class ChangeMaker {
                     relation: {
                         name: tableName,
                         schema: 'public',
-                        keyColumns: spec.primaryKey || Object.keys(row)
+                        rowKey: { columns: spec.primaryKey || Object.keys(row) }
                     }
                 }
             ] satisfies v0.Data
@@ -52,7 +52,7 @@ export class ChangeMaker {
                     relation: {
                         name: tableName,
                         schema: 'public',
-                        keyColumns: spec.primaryKey || Object.keys(oldRow)
+                        rowKey: { columns: spec.primaryKey || Object.keys(oldRow) }
                     }
                 }
             ] satisfies v0.Data
@@ -82,7 +82,7 @@ export class ChangeMaker {
                     relation: {
                         name: tableName,
                         schema: 'public',
-                        keyColumns: spec.primaryKey || Object.keys(row)
+                        rowKey: { columns: spec.primaryKey || Object.keys(row) }
                     }
                 }
             ] satisfies v0.Data
